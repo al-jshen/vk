@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
@@ -22,7 +22,7 @@ use winit::{
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
-const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
+const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_KHRONOS_validation"];
 
 #[cfg(debug_assertions)]
 const ENABLE_VALIDATION_LAYERS: bool = true;
@@ -38,7 +38,6 @@ impl VkApp {
     fn init_vulkan(window: &Window) -> Self {
         let entry = unsafe { Entry::new().unwrap() };
         let instance = VkApp::create_instance(window, &entry);
-        VkApp::check_validation_layer_support(&entry);
 
         VkApp {
             _entry: entry,
@@ -63,6 +62,11 @@ impl VkApp {
             .iter()
             .map(|x| vk_to_str(&x.layer_name))
             .collect::<Vec<_>>();
+
+        println!("Available layers");
+        for l in &available_layers {
+            println!("\t{}", l);
+        }
 
         for val_layer in VALIDATION_LAYERS {
             if !available_layers.contains(&val_layer) {
@@ -90,19 +94,34 @@ impl VkApp {
             api_version: API_VERSION_1_0,
         };
 
+        // don't combine these two maps. it doesn't work.
+        let layer_names = VALIDATION_LAYERS
+            .iter()
+            .map(|x| CString::new(*x).unwrap())
+            .collect::<Vec<_>>();
+        let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+
         let extension_names = enumerate_required_extensions(window)
             .unwrap()
             .iter()
             .map(|x| x.as_ptr())
-            .collect::<Vec<*const i8>>();
+            .collect::<Vec<_>>();
 
         let createinfo = InstanceCreateInfo {
             s_type: StructureType::INSTANCE_CREATE_INFO,
             p_next: std::ptr::null(),
             flags: InstanceCreateFlags::empty(),
             p_application_info: &appinfo,
-            enabled_layer_count: 0,
-            pp_enabled_layer_names: std::ptr::null(),
+            enabled_layer_count: if ENABLE_VALIDATION_LAYERS {
+                layer_names.len() as u32
+            } else {
+                0
+            },
+            pp_enabled_layer_names: if ENABLE_VALIDATION_LAYERS {
+                layer_names.as_ptr()
+            } else {
+                std::ptr::null()
+            },
             enabled_extension_count: extension_names.len() as u32,
             pp_enabled_extension_names: extension_names.as_ptr(),
         };
