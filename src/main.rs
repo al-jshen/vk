@@ -4,7 +4,6 @@ use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
 use ash::vk::make_version;
 use ash::vk::ApplicationInfo;
-// use ash::vk::Instance;
 use ash::vk::InstanceCreateFlags;
 use ash::vk::InstanceCreateInfo;
 use ash::vk::StructureType;
@@ -12,6 +11,7 @@ use ash::vk::API_VERSION_1_0;
 use ash::Entry;
 use ash::Instance;
 use ash_window::enumerate_required_extensions;
+use vk::vk_to_str;
 use winit::window::Window;
 use winit::{
     event::{Event, WindowEvent},
@@ -22,28 +22,62 @@ use winit::{
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
+const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
+
+#[cfg(debug_assertions)]
+const ENABLE_VALIDATION_LAYERS: bool = true;
+#[cfg(not(debug_assertions))]
+const ENABLE_VALIDATION_LAYERS: bool = false;
+
 struct VkApp {
-    entry: Entry,
+    _entry: Entry,
     instance: Instance,
 }
 
 impl VkApp {
     fn init_vulkan(window: &Window) -> Self {
         let entry = unsafe { Entry::new().unwrap() };
-        let instance = VkApp::create_instance(&window, &entry);
+        let instance = VkApp::create_instance(window, &entry);
+        VkApp::check_validation_layer_support(&entry);
 
-        VkApp { entry, instance }
+        VkApp {
+            _entry: entry,
+            instance,
+        }
     }
 
     fn init_window(event_loop: &EventLoop<()>) -> Window {
         WindowBuilder::new()
             .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT))
             .with_title("Vulkan")
-            .build(&event_loop)
+            .build(event_loop)
             .unwrap()
     }
 
+    fn check_validation_layer_support(entry: &Entry) -> bool {
+        let available_layers = entry
+            .enumerate_instance_layer_properties()
+            .expect("could not enumerate instance layer properties");
+
+        let available_layers = available_layers
+            .iter()
+            .map(|x| vk_to_str(&x.layer_name))
+            .collect::<Vec<_>>();
+
+        for val_layer in VALIDATION_LAYERS {
+            if !available_layers.contains(&val_layer) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     fn create_instance(window: &Window, entry: &Entry) -> Instance {
+        if ENABLE_VALIDATION_LAYERS && !VkApp::check_validation_layer_support(entry) {
+            panic!("validation layers requested but not available!");
+        }
+
         let appname = CString::new("Hello triangle!").unwrap();
         let enginename = CString::new("No Engine.").unwrap();
         let appinfo = ApplicationInfo {
@@ -73,13 +107,11 @@ impl VkApp {
             pp_enabled_extension_names: extension_names.as_ptr(),
         };
 
-        let result = unsafe {
+        unsafe {
             entry
-                .create_instance(&&createinfo, None)
+                .create_instance(&createinfo, None)
                 .expect("failed to create instance!")
-        };
-
-        result
+        }
     }
 
     fn main_loop(self, event_loop: EventLoop<()>) {
