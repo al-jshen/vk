@@ -7,3 +7,4 @@ edition = "2018"
 
 [dependencies]
 ash = "0.32"
+winit = "0.25"
