@@ -1,13 +1,19 @@
 use std::ffi::{CStr, CString};
 
+use ash::extensions::ext::DebugUtils;
 use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
-use ash::vk::make_version;
-use ash::vk::ApplicationInfo;
+use ash::vk::Bool32;
+use ash::vk::DebugUtilsMessageSeverityFlagsEXT;
+use ash::vk::DebugUtilsMessageTypeFlagsEXT;
+use ash::vk::DebugUtilsMessengerCallbackDataEXT;
+use ash::vk::DebugUtilsMessengerEXT;
 use ash::vk::InstanceCreateFlags;
 use ash::vk::InstanceCreateInfo;
 use ash::vk::StructureType;
 use ash::vk::API_VERSION_1_0;
+use ash::vk::{make_version, DebugUtilsMessengerCreateFlagsEXT};
+use ash::vk::{ApplicationInfo, DebugUtilsMessengerCreateInfoEXT};
 use ash::Entry;
 use ash::Instance;
 use ash_window::enumerate_required_extensions;
@@ -32,6 +38,23 @@ const ENABLE_VALIDATION_LAYERS: bool = false;
 struct VkApp {
     _entry: Entry,
     instance: Instance,
+    // debug_messenger: DebugUtilsMessengerEXT,
+}
+
+unsafe extern "system" fn debug_callback(
+    message_severity: DebugUtilsMessageSeverityFlagsEXT,
+    message_type: DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const DebugUtilsMessengerCallbackDataEXT,
+    _p_user_data: *mut std::ffi::c_void,
+) -> Bool32 {
+    let message = CStr::from_ptr((*p_callback_data).p_message);
+
+    println!(
+        "[DEBUG] {:?} {:?} {:?}",
+        message_severity, message_type, message
+    );
+
+    ash::vk::FALSE
 }
 
 impl VkApp {
@@ -51,6 +74,30 @@ impl VkApp {
             .with_title("Vulkan")
             .build(event_loop)
             .unwrap()
+    }
+
+    fn setup_debug_messenger(entry: &Entry, instance: &Instance) {
+        let debug_utils = DebugUtils::new(entry, instance);
+
+        todo!();
+
+        if !ENABLE_VALIDATION_LAYERS {
+            return;
+        }
+
+        let debug_utils_messenger_create_info = DebugUtilsMessengerCreateInfoEXT {
+            s_type: StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+            p_next: std::ptr::null(),
+            flags: DebugUtilsMessengerCreateFlagsEXT::empty(),
+            message_severity: DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                | DebugUtilsMessageSeverityFlagsEXT::WARNING
+                | DebugUtilsMessageSeverityFlagsEXT::ERROR,
+            message_type: DebugUtilsMessageTypeFlagsEXT::GENERAL
+                | DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+            pfn_user_callback: Some(debug_callback),
+            p_user_data: std::ptr::null_mut(),
+        };
     }
 
     fn check_validation_layer_support(entry: &Entry) -> bool {
@@ -77,6 +124,17 @@ impl VkApp {
         true
     }
 
+    fn get_required_extensions(window: &Window) -> Vec<*const i8> {
+        let mut extensions = enumerate_required_extensions(window).unwrap();
+
+        if ENABLE_VALIDATION_LAYERS {
+            // don't type the string yourself. doesn't like it.
+            extensions.push(ash::extensions::ext::DebugUtils::name());
+        }
+
+        extensions.iter().map(|x| x.as_ptr()).collect::<Vec<_>>()
+    }
+
     fn create_instance(window: &Window, entry: &Entry) -> Instance {
         if ENABLE_VALIDATION_LAYERS && !VkApp::check_validation_layer_support(entry) {
             panic!("validation layers requested but not available!");
@@ -101,11 +159,7 @@ impl VkApp {
             .collect::<Vec<_>>();
         let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
 
-        let extension_names = enumerate_required_extensions(window)
-            .unwrap()
-            .iter()
-            .map(|x| x.as_ptr())
-            .collect::<Vec<_>>();
+        let extension_names = VkApp::get_required_extensions(window);
 
         let createinfo = InstanceCreateInfo {
             s_type: StructureType::INSTANCE_CREATE_INFO,
