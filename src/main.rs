@@ -1,29 +1,14 @@
 use std::ffi::{c_void, CStr, CString};
 
-use ash::extensions::ext::DebugUtils;
-use ash::version::InstanceV1_0;
-use ash::version::{DeviceV1_0, EntryV1_0};
-use ash::vk::{make_version, DebugUtilsMessengerCreateFlagsEXT};
-use ash::vk::{ApplicationInfo, DebugUtilsMessengerCreateInfoEXT};
-use ash::vk::{Bool32, QueueFlags};
-use ash::vk::{
-    DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT,
-    DebugUtilsMessengerCallbackDataEXT, DebugUtilsMessengerEXT,
-};
-use ash::vk::{DeviceCreateFlags, StructureType};
-use ash::vk::{DeviceCreateInfo, InstanceCreateInfo};
-use ash::vk::{DeviceQueueCreateFlags, DeviceQueueCreateInfo, InstanceCreateFlags};
-use ash::vk::{PhysicalDevice, PhysicalDeviceFeatures};
-use ash::vk::{Queue, API_VERSION_1_0};
-use ash::Device;
-use ash::Entry;
-use ash::Instance;
-use vk::vk_to_str;
-use winit::event::{ElementState, KeyboardInput, VirtualKeyCode};
-use winit::window::Window;
+use ash::extensions::{ext::DebugUtils, khr};
+use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
+use ash::vk;
+use vka::vk_to_str;
 use winit::{
+    event::{ElementState, KeyboardInput, VirtualKeyCode},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
+    window::Window,
     window::WindowBuilder,
 };
 
@@ -38,11 +23,13 @@ const ENABLE_VALIDATION_LAYERS: bool = true;
 const ENABLE_VALIDATION_LAYERS: bool = false;
 
 struct VkApp {
-    _entry: Entry,
-    instance: Instance,
+    _entry: ash::Entry,
+    instance: ash::Instance,
     debug_utils: DebugUtils,
-    debug_messenger: DebugUtilsMessengerEXT,
-    device: Device,
+    debug_messenger: vk::DebugUtilsMessengerEXT,
+    device: ash::Device,
+    surface: vk::SurfaceKHR,
+    surface_loader: khr::Surface,
 }
 
 struct QueueFamilyIndices {
@@ -56,11 +43,11 @@ impl QueueFamilyIndices {
 }
 
 unsafe extern "system" fn debug_callback(
-    message_severity: DebugUtilsMessageSeverityFlagsEXT,
-    message_type: DebugUtilsMessageTypeFlagsEXT,
-    p_callback_data: *const DebugUtilsMessengerCallbackDataEXT,
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _p_user_data: *mut c_void,
-) -> Bool32 {
+) -> vk::Bool32 {
     let message = CStr::from_ptr((*p_callback_data).p_message);
 
     println!(
@@ -71,41 +58,29 @@ unsafe extern "system" fn debug_callback(
     ash::vk::FALSE
 }
 
-fn populate_debug_messenger_create_info() -> DebugUtilsMessengerCreateInfoEXT {
-    DebugUtilsMessengerCreateInfoEXT {
-        s_type: StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT {
+    vk::DebugUtilsMessengerCreateInfoEXT {
+        s_type: vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
         p_next: std::ptr::null(),
-        flags: DebugUtilsMessengerCreateFlagsEXT::empty(),
-        message_severity: DebugUtilsMessageSeverityFlagsEXT::ERROR
-            | DebugUtilsMessageSeverityFlagsEXT::WARNING
-            | DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-            | DebugUtilsMessageSeverityFlagsEXT::INFO,
-        message_type: DebugUtilsMessageTypeFlagsEXT::GENERAL
-            | DebugUtilsMessageTypeFlagsEXT::VALIDATION
-            | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        flags: vk::DebugUtilsMessengerCreateFlagsEXT::empty(),
+        message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+            | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+        message_type: vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
         pfn_user_callback: Some(debug_callback),
         p_user_data: std::ptr::null_mut(),
     }
 }
 
-// does not like this. just retype the function every time.
-// fn get_validation_layer_names_as_ptrs() -> Vec<*const i8> {
-
-//     // don't combine the maps. does not like that.
-//     let layer_names = VALIDATION_LAYERS
-//         .iter()
-//         .map(|x| CString::new(*x).unwrap())
-//         .collect::<Vec<_>>();
-//     let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
-
-//     layer_names
-// }
-
 impl VkApp {
-    fn init_vulkan() -> Self {
-        let entry = unsafe { Entry::new().unwrap() };
-        let instance = Self::create_instance(&entry);
+    fn init_vulkan(window: &Window) -> Self {
+        let entry = unsafe { ash::Entry::new().unwrap() };
+        let instance = Self::create_instance(&entry, window);
         let (debug_utils, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
+        let (surface, surface_loader) = Self::create_surface(&entry, &instance, window);
         let physical_device = Self::pick_physical_device(&instance);
         let (logical_device, graphics_queue) =
             Self::create_logical_device(&instance, physical_device);
@@ -116,6 +91,8 @@ impl VkApp {
             debug_utils,
             debug_messenger,
             device: logical_device,
+            surface,
+            surface_loader,
         }
     }
 
@@ -128,13 +105,13 @@ impl VkApp {
     }
 
     fn setup_debug_messenger(
-        entry: &Entry,
-        instance: &Instance,
-    ) -> (DebugUtils, DebugUtilsMessengerEXT) {
+        entry: &ash::Entry,
+        instance: &ash::Instance,
+    ) -> (DebugUtils, vk::DebugUtilsMessengerEXT) {
         let debug_utils = DebugUtils::new(entry, instance);
 
         if !ENABLE_VALIDATION_LAYERS {
-            return (debug_utils, DebugUtilsMessengerEXT::null());
+            return (debug_utils, vk::DebugUtilsMessengerEXT::null());
         }
 
         let messenger_create_info = populate_debug_messenger_create_info();
@@ -148,7 +125,7 @@ impl VkApp {
         (debug_utils, debug_utils_messenger)
     }
 
-    fn check_validation_layer_support(entry: &Entry) -> bool {
+    fn check_validation_layer_support(entry: &ash::Entry) -> bool {
         let available_layers = entry
             .enumerate_instance_layer_properties()
             .expect("could not enumerate instance layer properties");
@@ -172,14 +149,29 @@ impl VkApp {
         true
     }
 
-    pub fn pick_physical_device(instance: &Instance) -> PhysicalDevice {
+    pub fn create_surface(
+        entry: &ash::Entry,
+        instance: &ash::Instance,
+        window: &Window,
+    ) -> (vk::SurfaceKHR, khr::Surface) {
+        let surface = unsafe {
+            ash_window::create_surface(entry, instance, window, None)
+                .expect("failed to create window surface!")
+        };
+
+        let surface_loader = khr::Surface::new(entry, instance);
+
+        (surface, surface_loader)
+    }
+
+    pub fn pick_physical_device(instance: &ash::Instance) -> vk::PhysicalDevice {
         let devices = unsafe {
             instance
                 .enumerate_physical_devices()
                 .expect("could not enumerate physical devices")
         };
 
-        if devices.len() == 0 {
+        if devices.is_empty() {
             panic!("failed to find GPUs with Vulkan support!");
         }
 
@@ -192,7 +184,7 @@ impl VkApp {
         panic!("failed to find GPUs with Vulkan support!");
     }
 
-    pub fn is_device_suitable(instance: &Instance, device: PhysicalDevice) -> bool {
+    pub fn is_device_suitable(instance: &ash::Instance, device: vk::PhysicalDevice) -> bool {
         // let mut device_properties = unsafe { instance.get_physical_device_properties(device) };
         // let mut device_features = unsafe { instance.get_physical_device_features(device) };
 
@@ -201,7 +193,10 @@ impl VkApp {
         indices.is_complete()
     }
 
-    pub fn find_queue_family(instance: &Instance, device: PhysicalDevice) -> QueueFamilyIndices {
+    pub fn find_queue_family(
+        instance: &ash::Instance,
+        device: vk::PhysicalDevice,
+    ) -> QueueFamilyIndices {
         let mut indices = QueueFamilyIndices {
             graphics_family: None,
         };
@@ -209,7 +204,7 @@ impl VkApp {
             unsafe { instance.get_physical_device_queue_family_properties(device) };
 
         for (i, qf) in queue_families_properties.iter().enumerate() {
-            if qf.queue_flags.contains(QueueFlags::GRAPHICS) {
+            if qf.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                 indices.graphics_family = Some(i as u32);
                 break;
             }
@@ -219,23 +214,23 @@ impl VkApp {
     }
 
     pub fn create_logical_device(
-        instance: &Instance,
-        physical_device: PhysicalDevice,
-    ) -> (Device, Queue) {
+        instance: &ash::Instance,
+        physical_device: vk::PhysicalDevice,
+    ) -> (ash::Device, vk::Queue) {
         let indices = Self::find_queue_family(instance, physical_device);
 
         let queue_priority = &1_f32 as *const f32;
 
-        let queue_create_info = DeviceQueueCreateInfo {
-            s_type: StructureType::DEVICE_QUEUE_CREATE_INFO,
+        let queue_create_info = vk::DeviceQueueCreateInfo {
+            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
             p_next: std::ptr::null(),
-            flags: DeviceQueueCreateFlags::empty(),
+            flags: vk::DeviceQueueCreateFlags::empty(),
             queue_family_index: indices.graphics_family.unwrap(),
             queue_count: 1,
             p_queue_priorities: queue_priority,
         };
 
-        let device_features = PhysicalDeviceFeatures::default(); // defaults to all 0 (false)
+        let device_features = vk::PhysicalDeviceFeatures::default(); // defaults to all 0 (false)
 
         // let layer_names = get_validation_layer_names_as_ptrs();
 
@@ -245,10 +240,10 @@ impl VkApp {
             .collect::<Vec<_>>();
         let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
 
-        let create_info = DeviceCreateInfo {
-            s_type: StructureType::DEVICE_CREATE_INFO,
+        let create_info = vk::DeviceCreateInfo {
+            s_type: vk::StructureType::DEVICE_CREATE_INFO,
             p_next: std::ptr::null(),
-            flags: DeviceCreateFlags::empty(),
+            flags: vk::DeviceCreateFlags::empty(),
             queue_create_info_count: 1,
             p_queue_create_infos: &queue_create_info,
             enabled_layer_count: if ENABLE_VALIDATION_LAYERS {
@@ -278,57 +273,46 @@ impl VkApp {
         (logical_device, graphics_queue)
     }
 
-    pub fn get_required_extensions() -> Vec<*const i8> {
-        vec![
-            ash::extensions::khr::Surface::name().as_ptr(),
-            ash::extensions::khr::XlibSurface::name().as_ptr(),
-            ash::extensions::ext::DebugUtils::name().as_ptr(),
-        ]
-    }
-
-    fn create_instance(entry: &Entry) -> Instance {
+    fn create_instance(entry: &ash::Entry, window: &Window) -> ash::Instance {
         if ENABLE_VALIDATION_LAYERS && !Self::check_validation_layer_support(entry) {
             panic!("validation layers requested but not available!");
         }
 
         let appname = CString::new("Hello triangle!").unwrap();
         let enginename = CString::new("No Engine.").unwrap();
-        let appinfo = ApplicationInfo {
-            s_type: StructureType::APPLICATION_INFO,
+        let appinfo = vk::ApplicationInfo {
+            s_type: vk::StructureType::APPLICATION_INFO,
             p_next: std::ptr::null(),
             p_application_name: appname.as_ptr(),
-            application_version: make_version(1, 0, 0),
+            application_version: vk::make_version(1, 2, 0),
             p_engine_name: enginename.as_ptr(),
-            engine_version: make_version(1, 0, 0),
-            api_version: API_VERSION_1_0,
+            engine_version: vk::make_version(1, 2, 0),
+            api_version: vk::API_VERSION_1_2,
         };
 
         let debug_utils_create_info = populate_debug_messenger_create_info();
 
-        // don't combine these two maps. it doesn't work.
-        // let layer_names = VALIDATION_LAYERS
-        //     .iter()
-        //     .map(|x| CString::new(*x).unwrap())
-        //     .collect::<Vec<_>>();
-        // let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
-
-        // let layer_names = get_validation_layer_names_as_ptrs();
         let layer_names = VALIDATION_LAYERS
             .iter()
             .map(|x| CString::new(*x).unwrap())
             .collect::<Vec<_>>();
         let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
 
-        let extension_names = Self::get_required_extensions();
+        let extension_names = ash_window::enumerate_required_extensions(window)
+            .unwrap()
+            .iter()
+            .map(|x| x.as_ptr())
+            .collect::<Vec<*const i8>>();
 
-        let createinfo = InstanceCreateInfo {
-            s_type: StructureType::INSTANCE_CREATE_INFO,
+        let createinfo = vk::InstanceCreateInfo {
+            s_type: vk::StructureType::INSTANCE_CREATE_INFO,
             p_next: if ENABLE_VALIDATION_LAYERS {
-                &debug_utils_create_info as *const DebugUtilsMessengerCreateInfoEXT as *const c_void
+                &debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT
+                    as *const c_void
             } else {
                 std::ptr::null()
             },
-            flags: InstanceCreateFlags::empty(),
+            flags: vk::InstanceCreateFlags::empty(),
             p_application_info: &appinfo,
             enabled_layer_count: if ENABLE_VALIDATION_LAYERS {
                 layer_names.len() as u32
@@ -389,6 +373,7 @@ impl Drop for VkApp {
                 self.debug_utils
                     .destroy_debug_utils_messenger(self.debug_messenger, None);
             }
+            self.surface_loader.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
         }
     }
@@ -396,7 +381,7 @@ impl Drop for VkApp {
 
 fn main() {
     let el = EventLoop::new();
-    let _win = VkApp::init_window(&el);
-    let app = VkApp::init_vulkan();
+    let win = VkApp::init_window(&el);
+    let app = VkApp::init_vulkan(&win);
     app.main_loop(el);
 }

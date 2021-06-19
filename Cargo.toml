@@ -1,5 +1,5 @@
 [package]
-name = "vk"
+name = "vka"
 version = "0.1.0"
 edition = "2018"
 
@@ -7,7 +7,7 @@ edition = "2018"
 
 [dependencies]
 ash = "0.32"
-ash-window = "0.4"
+ash-window = "0.6"
 raw-window-handle = "0.3"
 winit = "0.25"
 
