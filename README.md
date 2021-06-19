@@ -1,10 +1,6 @@
 # vk
 
-Learning Vulkan with [`ash`](https://github.com/MaikKlein/ash).
-
-Resources: 
-
-- https://vulkan-tutorial.com/
+Learning Vulkan with [`ash`](https://github.com/MaikKlein/ash) using https://vulkan-tutorial.com.
 
 Progress
 ---
