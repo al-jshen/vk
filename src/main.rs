@@ -3,17 +3,18 @@ use std::ffi::{c_void, CStr, CString};
 use ash::extensions::ext::DebugUtils;
 use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
-use ash::vk::Bool32;
 use ash::vk::DebugUtilsMessageSeverityFlagsEXT;
 use ash::vk::DebugUtilsMessageTypeFlagsEXT;
 use ash::vk::DebugUtilsMessengerCallbackDataEXT;
 use ash::vk::DebugUtilsMessengerEXT;
 use ash::vk::InstanceCreateFlags;
 use ash::vk::InstanceCreateInfo;
+use ash::vk::PhysicalDevice;
 use ash::vk::StructureType;
 use ash::vk::API_VERSION_1_0;
 use ash::vk::{make_version, DebugUtilsMessengerCreateFlagsEXT};
 use ash::vk::{ApplicationInfo, DebugUtilsMessengerCreateInfoEXT};
+use ash::vk::{Bool32, QueueFlags};
 use ash::Entry;
 use ash::Instance;
 use vk::vk_to_str;
@@ -40,6 +41,16 @@ struct VkApp {
     instance: Instance,
     debug_utils: DebugUtils,
     debug_messenger: DebugUtilsMessengerEXT,
+}
+
+struct QueueFamilyIndices {
+    graphics_family: Option<u32>,
+}
+
+impl QueueFamilyIndices {
+    pub fn is_complete(&self) -> bool {
+        self.graphics_family.is_some()
+    }
 }
 
 unsafe extern "system" fn debug_callback(
@@ -80,6 +91,7 @@ impl VkApp {
         let entry = unsafe { Entry::new().unwrap() };
         let instance = Self::create_instance(&entry);
         let (debug_utils, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
+        let _physical_device = Self::pick_physical_device(&instance);
 
         VkApp {
             _entry: entry,
@@ -140,6 +152,52 @@ impl VkApp {
         }
 
         true
+    }
+
+    pub fn pick_physical_device(instance: &Instance) -> PhysicalDevice {
+        let devices = unsafe {
+            instance
+                .enumerate_physical_devices()
+                .expect("could not enumerate physical devices")
+        };
+
+        if devices.len() == 0 {
+            panic!("failed to find GPUs with Vulkan support!");
+        }
+
+        for device in devices {
+            if Self::is_device_suitable(instance, device) {
+                return device;
+            }
+        }
+
+        panic!("failed to find GPUs with Vulkan support!");
+    }
+
+    pub fn is_device_suitable(instance: &Instance, device: PhysicalDevice) -> bool {
+        // let mut device_properties = unsafe { instance.get_physical_device_properties(device) };
+        // let mut device_features = unsafe { instance.get_physical_device_features(device) };
+
+        let indices = Self::find_queue_family(instance, device);
+
+        indices.is_complete()
+    }
+
+    pub fn find_queue_family(instance: &Instance, device: PhysicalDevice) -> QueueFamilyIndices {
+        let mut indices = QueueFamilyIndices {
+            graphics_family: None,
+        };
+        let queue_families_properties =
+            unsafe { instance.get_physical_device_queue_family_properties(device) };
+
+        for (i, qf) in queue_families_properties.iter().enumerate() {
+            if qf.queue_flags.contains(QueueFlags::GRAPHICS) {
+                indices.graphics_family = Some(i as u32);
+                break;
+            }
+        }
+
+        indices
     }
 
     pub fn get_required_extensions() -> Vec<*const i8> {
@@ -241,10 +299,10 @@ impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
             // this doesn't work??? doesn't complain when disabled.
-            // if ENABLE_VALIDATION_LAYERS {
-            //     self.debug_utils
-            //         .destroy_debug_utils_messenger(self.debug_messenger, None);
-            // }
+            if ENABLE_VALIDATION_LAYERS {
+                self.debug_utils
+                    .destroy_debug_utils_messenger(self.debug_messenger, None);
+            }
             self.instance.destroy_instance(None);
         }
     }
@@ -252,7 +310,7 @@ impl Drop for VkApp {
 
 fn main() {
     let el = EventLoop::new();
-    let win = VkApp::init_window(&el);
+    let _win = VkApp::init_window(&el);
     let app = VkApp::init_vulkan();
     app.main_loop(el);
 }
