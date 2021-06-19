@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 
 use ash::extensions::ext::DebugUtils;
 use ash::version::EntryV1_0;
@@ -16,8 +16,8 @@ use ash::vk::{make_version, DebugUtilsMessengerCreateFlagsEXT};
 use ash::vk::{ApplicationInfo, DebugUtilsMessengerCreateInfoEXT};
 use ash::Entry;
 use ash::Instance;
-use ash_window::enumerate_required_extensions;
 use vk::vk_to_str;
+use winit::event::{ElementState, KeyboardInput, VirtualKeyCode};
 use winit::window::Window;
 use winit::{
     event::{Event, WindowEvent},
@@ -28,7 +28,7 @@ use winit::{
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
-const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_KHRONOS_validation"];
+const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
 #[cfg(debug_assertions)]
 const ENABLE_VALIDATION_LAYERS: bool = true;
@@ -38,33 +38,54 @@ const ENABLE_VALIDATION_LAYERS: bool = false;
 struct VkApp {
     _entry: Entry,
     instance: Instance,
-    // debug_messenger: DebugUtilsMessengerEXT,
+    debug_utils: DebugUtils,
+    debug_messenger: DebugUtilsMessengerEXT,
 }
 
 unsafe extern "system" fn debug_callback(
     message_severity: DebugUtilsMessageSeverityFlagsEXT,
     message_type: DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: *const DebugUtilsMessengerCallbackDataEXT,
-    _p_user_data: *mut std::ffi::c_void,
+    _p_user_data: *mut c_void,
 ) -> Bool32 {
     let message = CStr::from_ptr((*p_callback_data).p_message);
 
     println!(
-        "[DEBUG] {:?} {:?} {:?}",
+        "[DEBUG] [{:?}] [{:?}] {:?}",
         message_severity, message_type, message
     );
 
     ash::vk::FALSE
 }
 
+fn populate_debug_messenger_create_info() -> DebugUtilsMessengerCreateInfoEXT {
+    DebugUtilsMessengerCreateInfoEXT {
+        s_type: StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+        p_next: std::ptr::null(),
+        flags: DebugUtilsMessengerCreateFlagsEXT::empty(),
+        message_severity: DebugUtilsMessageSeverityFlagsEXT::ERROR
+            | DebugUtilsMessageSeverityFlagsEXT::WARNING
+            | DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+            | DebugUtilsMessageSeverityFlagsEXT::INFO,
+        message_type: DebugUtilsMessageTypeFlagsEXT::GENERAL
+            | DebugUtilsMessageTypeFlagsEXT::VALIDATION
+            | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        pfn_user_callback: Some(debug_callback),
+        p_user_data: std::ptr::null_mut(),
+    }
+}
+
 impl VkApp {
-    fn init_vulkan(window: &Window) -> Self {
+    fn init_vulkan() -> Self {
         let entry = unsafe { Entry::new().unwrap() };
-        let instance = VkApp::create_instance(window, &entry);
+        let instance = Self::create_instance(&entry);
+        let (debug_utils, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
 
         VkApp {
             _entry: entry,
             instance,
+            debug_utils,
+            debug_messenger,
         }
     }
 
@@ -73,31 +94,28 @@ impl VkApp {
             .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT))
             .with_title("Vulkan")
             .build(event_loop)
-            .unwrap()
+            .expect("failed to create window")
     }
 
-    fn setup_debug_messenger(entry: &Entry, instance: &Instance) {
+    fn setup_debug_messenger(
+        entry: &Entry,
+        instance: &Instance,
+    ) -> (DebugUtils, DebugUtilsMessengerEXT) {
         let debug_utils = DebugUtils::new(entry, instance);
 
-        todo!();
-
         if !ENABLE_VALIDATION_LAYERS {
-            return;
+            return (debug_utils, DebugUtilsMessengerEXT::null());
         }
 
-        let debug_utils_messenger_create_info = DebugUtilsMessengerCreateInfoEXT {
-            s_type: StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-            p_next: std::ptr::null(),
-            flags: DebugUtilsMessengerCreateFlagsEXT::empty(),
-            message_severity: DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                | DebugUtilsMessageSeverityFlagsEXT::WARNING
-                | DebugUtilsMessageSeverityFlagsEXT::ERROR,
-            message_type: DebugUtilsMessageTypeFlagsEXT::GENERAL
-                | DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-            pfn_user_callback: Some(debug_callback),
-            p_user_data: std::ptr::null_mut(),
+        let messenger_create_info = populate_debug_messenger_create_info();
+
+        let debug_utils_messenger = unsafe {
+            debug_utils
+                .create_debug_utils_messenger(&messenger_create_info, None)
+                .expect("could not create debug messenger")
         };
+
+        (debug_utils, debug_utils_messenger)
     }
 
     fn check_validation_layer_support(entry: &Entry) -> bool {
@@ -124,19 +142,16 @@ impl VkApp {
         true
     }
 
-    fn get_required_extensions(window: &Window) -> Vec<*const i8> {
-        let mut extensions = enumerate_required_extensions(window).unwrap();
-
-        if ENABLE_VALIDATION_LAYERS {
-            // don't type the string yourself. doesn't like it.
-            extensions.push(ash::extensions::ext::DebugUtils::name());
-        }
-
-        extensions.iter().map(|x| x.as_ptr()).collect::<Vec<_>>()
+    pub fn get_required_extensions() -> Vec<*const i8> {
+        vec![
+            ash::extensions::khr::Surface::name().as_ptr(),
+            ash::extensions::khr::XlibSurface::name().as_ptr(),
+            ash::extensions::ext::DebugUtils::name().as_ptr(),
+        ]
     }
 
-    fn create_instance(window: &Window, entry: &Entry) -> Instance {
-        if ENABLE_VALIDATION_LAYERS && !VkApp::check_validation_layer_support(entry) {
+    fn create_instance(entry: &Entry) -> Instance {
+        if ENABLE_VALIDATION_LAYERS && !Self::check_validation_layer_support(entry) {
             panic!("validation layers requested but not available!");
         }
 
@@ -152,6 +167,8 @@ impl VkApp {
             api_version: API_VERSION_1_0,
         };
 
+        let debug_utils_create_info = populate_debug_messenger_create_info();
+
         // don't combine these two maps. it doesn't work.
         let layer_names = VALIDATION_LAYERS
             .iter()
@@ -159,11 +176,15 @@ impl VkApp {
             .collect::<Vec<_>>();
         let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
 
-        let extension_names = VkApp::get_required_extensions(window);
+        let extension_names = Self::get_required_extensions();
 
         let createinfo = InstanceCreateInfo {
             s_type: StructureType::INSTANCE_CREATE_INFO,
-            p_next: std::ptr::null(),
+            p_next: if ENABLE_VALIDATION_LAYERS {
+                &debug_utils_create_info as *const DebugUtilsMessengerCreateInfoEXT as *const c_void
+            } else {
+                std::ptr::null()
+            },
             flags: InstanceCreateFlags::empty(),
             p_application_info: &appinfo,
             enabled_layer_count: if ENABLE_VALIDATION_LAYERS {
@@ -180,11 +201,13 @@ impl VkApp {
             pp_enabled_extension_names: extension_names.as_ptr(),
         };
 
-        unsafe {
+        let instance = unsafe {
             entry
                 .create_instance(&createinfo, None)
                 .expect("failed to create instance!")
-        }
+        };
+
+        instance
     }
 
     fn main_loop(self, event_loop: EventLoop<()>) {
@@ -194,6 +217,18 @@ impl VkApp {
             match event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                    WindowEvent::KeyboardInput { input, .. } => match input {
+                        KeyboardInput {
+                            virtual_keycode,
+                            state,
+                            ..
+                        } => match (virtual_keycode, state) {
+                            (Some(VirtualKeyCode::Escape), ElementState::Pressed) => {
+                                *control_flow = ControlFlow::Exit
+                            }
+                            _ => {}
+                        },
+                    },
                     _ => {}
                 },
                 _ => {}
@@ -204,13 +239,20 @@ impl VkApp {
 
 impl Drop for VkApp {
     fn drop(&mut self) {
-        unsafe { self.instance.destroy_instance(None) }
+        unsafe {
+            // this doesn't work??? doesn't complain when disabled.
+            // if ENABLE_VALIDATION_LAYERS {
+            //     self.debug_utils
+            //         .destroy_debug_utils_messenger(self.debug_messenger, None);
+            // }
+            self.instance.destroy_instance(None);
+        }
     }
 }
 
 fn main() {
     let el = EventLoop::new();
     let win = VkApp::init_window(&el);
-    let app = VkApp::init_vulkan(&win);
+    let app = VkApp::init_vulkan();
     app.main_loop(el);
 }
