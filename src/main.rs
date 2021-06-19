@@ -1,20 +1,21 @@
 use std::ffi::{c_void, CStr, CString};
 
 use ash::extensions::ext::DebugUtils;
-use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
-use ash::vk::DebugUtilsMessageSeverityFlagsEXT;
-use ash::vk::DebugUtilsMessageTypeFlagsEXT;
-use ash::vk::DebugUtilsMessengerCallbackDataEXT;
-use ash::vk::DebugUtilsMessengerEXT;
-use ash::vk::InstanceCreateFlags;
-use ash::vk::InstanceCreateInfo;
-use ash::vk::PhysicalDevice;
-use ash::vk::StructureType;
-use ash::vk::API_VERSION_1_0;
+use ash::version::{DeviceV1_0, EntryV1_0};
 use ash::vk::{make_version, DebugUtilsMessengerCreateFlagsEXT};
 use ash::vk::{ApplicationInfo, DebugUtilsMessengerCreateInfoEXT};
 use ash::vk::{Bool32, QueueFlags};
+use ash::vk::{
+    DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT,
+    DebugUtilsMessengerCallbackDataEXT, DebugUtilsMessengerEXT,
+};
+use ash::vk::{DeviceCreateFlags, StructureType};
+use ash::vk::{DeviceCreateInfo, InstanceCreateInfo};
+use ash::vk::{DeviceQueueCreateFlags, DeviceQueueCreateInfo, InstanceCreateFlags};
+use ash::vk::{PhysicalDevice, PhysicalDeviceFeatures};
+use ash::vk::{Queue, API_VERSION_1_0};
+use ash::Device;
 use ash::Entry;
 use ash::Instance;
 use vk::vk_to_str;
@@ -41,6 +42,7 @@ struct VkApp {
     instance: Instance,
     debug_utils: DebugUtils,
     debug_messenger: DebugUtilsMessengerEXT,
+    device: Device,
 }
 
 struct QueueFamilyIndices {
@@ -86,18 +88,34 @@ fn populate_debug_messenger_create_info() -> DebugUtilsMessengerCreateInfoEXT {
     }
 }
 
+// does not like this. just retype the function every time.
+// fn get_validation_layer_names_as_ptrs() -> Vec<*const i8> {
+
+//     // don't combine the maps. does not like that.
+//     let layer_names = VALIDATION_LAYERS
+//         .iter()
+//         .map(|x| CString::new(*x).unwrap())
+//         .collect::<Vec<_>>();
+//     let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+
+//     layer_names
+// }
+
 impl VkApp {
     fn init_vulkan() -> Self {
         let entry = unsafe { Entry::new().unwrap() };
         let instance = Self::create_instance(&entry);
         let (debug_utils, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
-        let _physical_device = Self::pick_physical_device(&instance);
+        let physical_device = Self::pick_physical_device(&instance);
+        let (logical_device, graphics_queue) =
+            Self::create_logical_device(&instance, physical_device);
 
         VkApp {
             _entry: entry,
             instance,
             debug_utils,
             debug_messenger,
+            device: logical_device,
         }
     }
 
@@ -200,6 +218,66 @@ impl VkApp {
         indices
     }
 
+    pub fn create_logical_device(
+        instance: &Instance,
+        physical_device: PhysicalDevice,
+    ) -> (Device, Queue) {
+        let indices = Self::find_queue_family(instance, physical_device);
+
+        let queue_priority = &1_f32 as *const f32;
+
+        let queue_create_info = DeviceQueueCreateInfo {
+            s_type: StructureType::DEVICE_QUEUE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: DeviceQueueCreateFlags::empty(),
+            queue_family_index: indices.graphics_family.unwrap(),
+            queue_count: 1,
+            p_queue_priorities: queue_priority,
+        };
+
+        let device_features = PhysicalDeviceFeatures::default(); // defaults to all 0 (false)
+
+        // let layer_names = get_validation_layer_names_as_ptrs();
+
+        let layer_names = VALIDATION_LAYERS
+            .iter()
+            .map(|x| CString::new(*x).unwrap())
+            .collect::<Vec<_>>();
+        let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+
+        let create_info = DeviceCreateInfo {
+            s_type: StructureType::DEVICE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: DeviceCreateFlags::empty(),
+            queue_create_info_count: 1,
+            p_queue_create_infos: &queue_create_info,
+            enabled_layer_count: if ENABLE_VALIDATION_LAYERS {
+                layer_names.len() as u32
+            } else {
+                0
+            },
+            pp_enabled_layer_names: if ENABLE_VALIDATION_LAYERS {
+                layer_names.as_ptr()
+            } else {
+                std::ptr::null()
+            },
+            enabled_extension_count: 0,
+            pp_enabled_extension_names: std::ptr::null(),
+            p_enabled_features: &device_features,
+        };
+
+        let logical_device = unsafe {
+            instance
+                .create_device(physical_device, &create_info, None)
+                .expect("failed to create logical device!")
+        };
+
+        let graphics_queue =
+            unsafe { logical_device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+
+        (logical_device, graphics_queue)
+    }
+
     pub fn get_required_extensions() -> Vec<*const i8> {
         vec![
             ash::extensions::khr::Surface::name().as_ptr(),
@@ -228,6 +306,13 @@ impl VkApp {
         let debug_utils_create_info = populate_debug_messenger_create_info();
 
         // don't combine these two maps. it doesn't work.
+        // let layer_names = VALIDATION_LAYERS
+        //     .iter()
+        //     .map(|x| CString::new(*x).unwrap())
+        //     .collect::<Vec<_>>();
+        // let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+
+        // let layer_names = get_validation_layer_names_as_ptrs();
         let layer_names = VALIDATION_LAYERS
             .iter()
             .map(|x| CString::new(*x).unwrap())
@@ -298,6 +383,7 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_device(None);
             // this doesn't work??? doesn't complain when disabled.
             if ENABLE_VALIDATION_LAYERS {
                 self.debug_utils
