@@ -64,9 +64,9 @@ fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEX
         p_next: std::ptr::null(),
         flags: vk::DebugUtilsMessengerCreateFlagsEXT::empty(),
         message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-            | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+        // | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
         message_type: vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
             | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
             | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
@@ -273,6 +273,24 @@ impl VkApp {
         (logical_device, graphics_queue)
     }
 
+    fn get_required_extensions(window: &Window) -> Vec<*const i8> {
+        let mut extension_names = ash_window::enumerate_required_extensions(window).unwrap();
+
+        if ENABLE_VALIDATION_LAYERS {
+            extension_names.push(DebugUtils::name());
+        }
+
+        let extension_names_ptrs = extension_names
+            .iter()
+            .map(|x| {
+                println!("\t{}", x.to_str().unwrap());
+                x.as_ptr()
+            })
+            .collect::<Vec<*const i8>>();
+
+        extension_names_ptrs
+    }
+
     fn create_instance(entry: &ash::Entry, window: &Window) -> ash::Instance {
         if ENABLE_VALIDATION_LAYERS && !Self::check_validation_layer_support(entry) {
             panic!("validation layers requested but not available!");
@@ -298,11 +316,8 @@ impl VkApp {
             .collect::<Vec<_>>();
         let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
 
-        let extension_names = ash_window::enumerate_required_extensions(window)
-            .unwrap()
-            .iter()
-            .map(|x| x.as_ptr())
-            .collect::<Vec<*const i8>>();
+        println!("Available extensions");
+        let extension_names = Self::get_required_extensions(window);
 
         let createinfo = vk::InstanceCreateInfo {
             s_type: vk::StructureType::INSTANCE_CREATE_INFO,
