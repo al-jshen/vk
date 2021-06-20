@@ -15,6 +15,7 @@ use winit::{
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
+const DEVICE_EXTENSIONS: [&str; 1] = ["VK_KHR_swapchain"];
 const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
 #[cfg(debug_assertions)]
@@ -34,6 +35,20 @@ struct VkApp {
     present_queue: vk::Queue,
 }
 
+fn clamp<T>(val: T, min: T, max: T) -> T
+where
+    T: PartialOrd<T>,
+{
+    assert!(min < max, "min must be less than max");
+    if val < min {
+        min
+    } else if val > max {
+        max
+    } else {
+        val
+    }
+}
+
 struct QueueFamilyIndices {
     graphics_family: Option<u32>,
     present_family: Option<u32>,
@@ -42,6 +57,96 @@ struct QueueFamilyIndices {
 impl QueueFamilyIndices {
     pub fn is_complete(&self) -> bool {
         self.graphics_family.is_some() && self.present_family.is_some()
+    }
+}
+
+struct SwapchainSupportDetails {
+    capabilities: vk::SurfaceCapabilitiesKHR,
+    formats: Vec<vk::SurfaceFormatKHR>,
+    present_modes: Vec<vk::PresentModeKHR>,
+}
+
+impl SwapchainSupportDetails {
+    pub fn query_swapchain_support(
+        device: vk::PhysicalDevice,
+        surface_loader: &khr::Surface,
+        surface: vk::SurfaceKHR,
+    ) -> Self {
+        let capabilities = unsafe {
+            surface_loader
+                .get_physical_device_surface_capabilities(device, surface)
+                .expect("could not get physical device surface capabilities!")
+        };
+
+        let formats = unsafe {
+            surface_loader
+                .get_physical_device_surface_formats(device, surface)
+                .expect("could not get physical device surface formats!")
+        };
+
+        let present_modes = unsafe {
+            surface_loader
+                .get_physical_device_surface_present_modes(device, surface)
+                .expect("could not get physical device surface present modes!")
+        };
+
+        Self {
+            capabilities,
+            formats,
+            present_modes,
+        }
+    }
+
+    pub fn choose_swap_surface_format(
+        available_formats: &[vk::SurfaceFormatKHR],
+    ) -> vk::SurfaceFormatKHR {
+        for fmt in available_formats {
+            if fmt.format == vk::Format::B8G8R8_SRGB
+                && fmt.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+            {
+                return fmt.to_owned();
+            }
+        }
+
+        available_formats[0]
+    }
+
+    pub fn choose_swap_present_mode(
+        available_present_modes: &[vk::PresentModeKHR],
+    ) -> vk::PresentModeKHR {
+        if available_present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+            return vk::PresentModeKHR::MAILBOX;
+        }
+        vk::PresentModeKHR::FIFO
+    }
+
+    pub fn choose_swap_extent(
+        capabilities: vk::SurfaceCapabilitiesKHR,
+        window: &Window,
+    ) -> vk::Extent2D {
+        if capabilities.current_extent.width != u32::MAX {
+            return capabilities.current_extent;
+        }
+
+        let (phys_height, phys_width) = (window.inner_size().height, window.inner_size().width);
+        let scale_factor = window.scale_factor();
+
+        // logical size = physical size / scale factor
+        let actual_height = clamp(
+            (phys_height as f64 / scale_factor) as u32,
+            capabilities.min_image_extent.height,
+            capabilities.max_image_extent.height,
+        );
+        let actual_width = clamp(
+            (phys_width as f64 / scale_factor) as u32,
+            capabilities.min_image_extent.width,
+            capabilities.max_image_extent.width,
+        );
+
+        vk::Extent2D {
+            height: actual_height,
+            width: actual_width,
+        }
     }
 }
 
@@ -87,6 +192,7 @@ impl VkApp {
         let physical_device = Self::pick_physical_device(&instance, &surface_loader, &surface);
         let (logical_device, graphics_queue, present_queue) =
             Self::create_logical_device(&instance, physical_device, &surface_loader, &surface);
+        // let swapchain = Self::create_swapchain();
 
         VkApp {
             _entry: entry,
@@ -204,7 +310,41 @@ impl VkApp {
 
         let indices = Self::find_queue_family(instance, device, surface_loader, surface);
 
-        indices.is_complete()
+        let extensions_supported = Self::check_device_extension_support(instance, device);
+
+        let swapchain_adequate = if extensions_supported {
+            let swapchain_support =
+                SwapchainSupportDetails::query_swapchain_support(device, surface_loader, *surface);
+            !swapchain_support.formats.is_empty() && !swapchain_support.present_modes.is_empty()
+        } else {
+            false
+        };
+
+        indices.is_complete() && extensions_supported && swapchain_adequate
+    }
+
+    pub fn check_device_extension_support(
+        instance: &ash::Instance,
+        device: vk::PhysicalDevice,
+    ) -> bool {
+        let extension_properties = unsafe {
+            instance
+                .enumerate_device_extension_properties(device)
+                .expect("could not enumerate device extension properties!")
+        };
+
+        let extension_properties = extension_properties
+            .iter()
+            .map(|ext| vk_to_str(&ext.extension_name))
+            .collect::<Vec<_>>();
+
+        for ext in DEVICE_EXTENSIONS.iter() {
+            if !extension_properties.contains(ext) {
+                return false;
+            }
+        }
+
+        true
     }
 
     pub fn find_queue_family(
@@ -281,6 +421,15 @@ impl VkApp {
             .collect::<Vec<_>>();
         let layer_names = layer_names.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
 
+        let device_extensions = DEVICE_EXTENSIONS
+            .iter()
+            .map(|x| CString::new(*x).unwrap())
+            .collect::<Vec<_>>();
+        let device_extensions = device_extensions
+            .iter()
+            .map(|x| x.as_ptr())
+            .collect::<Vec<*const i8>>();
+
         let create_info = vk::DeviceCreateInfo {
             s_type: vk::StructureType::DEVICE_CREATE_INFO,
             p_next: std::ptr::null(),
@@ -297,8 +446,8 @@ impl VkApp {
             } else {
                 std::ptr::null()
             },
-            enabled_extension_count: 0,
-            pp_enabled_extension_names: std::ptr::null(),
+            enabled_extension_count: device_extensions.len() as u32,
+            pp_enabled_extension_names: device_extensions.as_ptr(),
             p_enabled_features: &device_features,
         };
 
@@ -316,6 +465,23 @@ impl VkApp {
 
         (logical_device, graphics_queue, present_queue)
     }
+
+    // fn create_swapchain(
+    //     device: vk::PhysicalDevice,
+    //     surface_loader: &khr::Surface,
+    //     surface: &vk::SurfaceKHR,
+    //     window: &Window,
+    // ) {
+    //     let swapchain_support =
+    //         SwapchainSupportDetails::query_swapchain_support(device, surface_loader, *surface);
+
+    //     let surface_format =
+    //         SwapchainSupportDetails::choose_swap_surface_format(&swapchain_support.formats);
+    //     let present_mode =
+    //         SwapchainSupportDetails::choose_swap_present_mode(&swapchain_support.present_modes);
+    //     let extent =
+    //         SwapchainSupportDetails::choose_swap_extent(swapchain_support.capabilities, window);
+    // }
 
     fn get_required_extensions(window: &Window) -> Vec<*const i8> {
         let mut extension_names = ash_window::enumerate_required_extensions(window).unwrap();
