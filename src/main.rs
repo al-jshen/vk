@@ -33,6 +33,11 @@ struct VkApp {
     surface_loader: khr::Surface,
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
+    swapchain_loader: khr::Swapchain,
+    swapchain: vk::SwapchainKHR,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_format: vk::Format,
+    swapchain_extent: vk::Extent2D,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -192,7 +197,15 @@ impl VkApp {
         let physical_device = Self::pick_physical_device(&instance, &surface_loader, &surface);
         let (logical_device, graphics_queue, present_queue) =
             Self::create_logical_device(&instance, physical_device, &surface_loader, &surface);
-        // let swapchain = Self::create_swapchain();
+        let (swapchain_loader, swapchain, swapchain_images, swapchain_format, swapchain_extent) =
+            Self::create_swapchain(
+                &instance,
+                &logical_device,
+                physical_device,
+                &surface_loader,
+                &surface,
+                &window,
+            );
 
         VkApp {
             _entry: entry,
@@ -204,6 +217,11 @@ impl VkApp {
             surface_loader,
             graphics_queue,
             present_queue,
+            swapchain_loader,
+            swapchain,
+            swapchain_images,
+            swapchain_format,
+            swapchain_extent,
         }
     }
 
@@ -466,22 +484,87 @@ impl VkApp {
         (logical_device, graphics_queue, present_queue)
     }
 
-    // fn create_swapchain(
-    //     device: vk::PhysicalDevice,
-    //     surface_loader: &khr::Surface,
-    //     surface: &vk::SurfaceKHR,
-    //     window: &Window,
-    // ) {
-    //     let swapchain_support =
-    //         SwapchainSupportDetails::query_swapchain_support(device, surface_loader, *surface);
+    fn create_swapchain(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+        surface_loader: &khr::Surface,
+        surface: &vk::SurfaceKHR,
+        window: &Window,
+    ) -> (
+        khr::Swapchain,
+        vk::SwapchainKHR,
+        Vec<vk::Image>,
+        vk::Format,
+        vk::Extent2D,
+    ) {
+        let swapchain_support = SwapchainSupportDetails::query_swapchain_support(
+            physical_device,
+            surface_loader,
+            *surface,
+        );
+        let surface_format =
+            SwapchainSupportDetails::choose_swap_surface_format(&swapchain_support.formats);
+        let present_mode =
+            SwapchainSupportDetails::choose_swap_present_mode(&swapchain_support.present_modes);
+        let extent =
+            SwapchainSupportDetails::choose_swap_extent(swapchain_support.capabilities, window);
+        let mut image_count = swapchain_support.capabilities.min_image_count + 1;
+        if swapchain_support.capabilities.max_image_count > 0
+            && image_count > swapchain_support.capabilities.max_image_count
+        {
+            image_count = swapchain_support.capabilities.max_image_count;
+        }
 
-    //     let surface_format =
-    //         SwapchainSupportDetails::choose_swap_surface_format(&swapchain_support.formats);
-    //     let present_mode =
-    //         SwapchainSupportDetails::choose_swap_present_mode(&swapchain_support.present_modes);
-    //     let extent =
-    //         SwapchainSupportDetails::choose_swap_extent(swapchain_support.capabilities, window);
-    // }
+        let mut create_info = vk::SwapchainCreateInfoKHR::builder()
+            .surface(*surface)
+            .min_image_count(image_count)
+            .image_format(surface_format.format)
+            .image_color_space(surface_format.color_space)
+            .image_extent(extent)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .pre_transform(swapchain_support.capabilities.current_transform)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(present_mode)
+            .clipped(true)
+            .old_swapchain(vk::SwapchainKHR::null());
+
+        let indices = Self::find_queue_family(instance, physical_device, surface_loader, surface);
+        let queue_family_indices = [
+            indices.graphics_family.unwrap(),
+            indices.present_family.unwrap(),
+        ];
+
+        create_info = if indices.graphics_family != indices.present_family {
+            create_info
+                .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(&queue_family_indices)
+        } else {
+            create_info.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        };
+
+        let swapchain_loader = khr::Swapchain::new(instance, device);
+        let swapchain = unsafe {
+            swapchain_loader
+                .create_swapchain(&create_info, None)
+                .expect("failed to create swapchain!")
+        };
+
+        let swapchain_images = unsafe {
+            swapchain_loader
+                .get_swapchain_images(swapchain)
+                .expect("could not get swapchain images!")
+        };
+
+        (
+            swapchain_loader,
+            swapchain,
+            swapchain_images,
+            surface_format.format,
+            extent,
+        )
+    }
 
     fn get_required_extensions(window: &Window) -> Vec<*const i8> {
         let mut extension_names = ash_window::enumerate_required_extensions(window).unwrap();
@@ -592,6 +675,8 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
             // this doesn't work??? doesn't complain when disabled.
             if ENABLE_VALIDATION_LAYERS {
