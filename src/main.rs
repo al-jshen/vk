@@ -3,7 +3,7 @@ use std::ffi::{c_void, CStr, CString};
 use ash::extensions::{ext::DebugUtils, khr};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::vk;
-use vka::vk_to_str;
+use std::os::raw::c_char;
 use winit::{
     event::{ElementState, KeyboardInput, VirtualKeyCode},
     event::{Event, WindowEvent},
@@ -53,6 +53,12 @@ where
     } else {
         val
     }
+}
+
+pub fn vk_to_str(c: &[c_char]) -> &str {
+    unsafe { CStr::from_ptr(c.as_ptr()) }
+        .to_str()
+        .expect("failed to convert vulkan string")
 }
 
 struct QueueFamilyIndices {
