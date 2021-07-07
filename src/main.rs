@@ -38,6 +38,7 @@ struct VkApp {
     swapchain_images: Vec<vk::Image>,
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
+    swapchain_image_views: Vec<vk::ImageView>,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -206,6 +207,8 @@ impl VkApp {
                 &surface,
                 &window,
             );
+        let swapchain_image_views =
+            Self::create_image_views(&swapchain_images, swapchain_format, &logical_device);
 
         VkApp {
             _entry: entry,
@@ -222,6 +225,7 @@ impl VkApp {
             swapchain_images,
             swapchain_format,
             swapchain_extent,
+            swapchain_image_views,
         }
     }
 
@@ -584,6 +588,41 @@ impl VkApp {
         extension_names_ptrs
     }
 
+    fn create_image_views(
+        swapchain_images: &[vk::Image],
+        format: vk::Format,
+        device: &ash::Device,
+    ) -> Vec<vk::ImageView> {
+        swapchain_images
+            .iter()
+            .map(|image| {
+                let create_info = vk::ImageViewCreateInfo::builder()
+                    .image(*image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format)
+                    .components(vk::ComponentMapping {
+                        r: vk::ComponentSwizzle::IDENTITY,
+                        g: vk::ComponentSwizzle::IDENTITY,
+                        b: vk::ComponentSwizzle::IDENTITY,
+                        a: vk::ComponentSwizzle::IDENTITY,
+                    })
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    });
+
+                unsafe {
+                    device
+                        .create_image_view(&create_info, None)
+                        .expect("failed to create image view!")
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
     fn create_instance(entry: &ash::Entry, window: &Window) -> ash::Instance {
         if ENABLE_VALIDATION_LAYERS && !Self::check_validation_layer_support(entry) {
             panic!("validation layers requested but not available!");
@@ -675,6 +714,10 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            for i in 0..self.swapchain_image_views.len() {
+                self.device
+                    .destroy_image_view(self.swapchain_image_views[i], None);
+            }
             self.swapchain_loader
                 .destroy_swapchain(self.swapchain, None);
             self.device.destroy_device(None);
