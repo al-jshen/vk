@@ -14,4 +14,4 @@ Progress
   - Presentation
     - [Window surface](https://github.com/al-jshen/vka/blob/d1c394defc53eb6c581786602daa80879cdc918e/src/main.rs)
     - [Swapchain](https://github.com/al-jshen/vka/blob/a585abefde93c5ea4d60fe4bbfe9e2a23e713e7e/src/main.rs)
-    - [Image views](https://github.com/al-jshen/vka/blob/e7559545a809c680c9adf9d653e309d725c195d1/src/main.rs)
+    - [Image views](https://github.com/al-jshen/vka/blob/179b44ad4543784f62d9623d98867269046c85aa/src/main.rs)
