@@ -1,8 +1,9 @@
-use std::ffi::{c_void, CStr, CString};
-
 use ash::extensions::{ext::DebugUtils, khr};
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::vk;
+use std::ffi::{c_void, CStr, CString};
+use std::fs::File;
+use std::io::Read;
 use std::os::raw::c_char;
 use winit::{
     event::{ElementState, KeyboardInput, VirtualKeyCode},
@@ -39,6 +40,8 @@ struct VkApp {
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
     swapchain_image_views: Vec<vk::ImageView>,
+    // vert_shader_module: vk::ShaderModule,
+    // frag_shader_module: vk::ShaderModule,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -196,7 +199,7 @@ fn populate_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEX
 }
 
 impl VkApp {
-    fn init_vulkan(window: &Window) -> Self {
+    pub fn init_vulkan(window: &Window) -> Self {
         let entry = unsafe { ash::Entry::new().unwrap() };
         let instance = Self::create_instance(&entry, window);
         let (debug_utils, debug_messenger) = Self::setup_debug_messenger(&entry, &instance);
@@ -215,6 +218,8 @@ impl VkApp {
             );
         let swapchain_image_views =
             Self::create_image_views(&swapchain_images, swapchain_format, &logical_device);
+
+        let graphics_pipeline = Self::create_graphics_pipeline(&logical_device);
 
         VkApp {
             _entry: entry,
@@ -235,7 +240,7 @@ impl VkApp {
         }
     }
 
-    fn init_window(event_loop: &EventLoop<()>) -> Window {
+    pub fn init_window(event_loop: &EventLoop<()>) -> Window {
         WindowBuilder::new()
             .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT))
             .with_title("Vulkan")
@@ -243,7 +248,7 @@ impl VkApp {
             .expect("failed to create window")
     }
 
-    fn setup_debug_messenger(
+    pub fn setup_debug_messenger(
         entry: &ash::Entry,
         instance: &ash::Instance,
     ) -> (DebugUtils, vk::DebugUtilsMessengerEXT) {
@@ -264,7 +269,12 @@ impl VkApp {
         (debug_utils, debug_utils_messenger)
     }
 
-    fn check_validation_layer_support(entry: &ash::Entry) -> bool {
+    pub fn read_spv(fname: &str) -> Vec<u8> {
+        let file = File::open(fname).expect("could not read file!");
+        file.bytes().filter_map(|b| b.ok()).collect()
+    }
+
+    pub fn check_validation_layer_support(entry: &ash::Entry) -> bool {
         let available_layers = entry
             .enumerate_instance_layer_properties()
             .expect("could not enumerate instance layer properties");
@@ -494,7 +504,7 @@ impl VkApp {
         (logical_device, graphics_queue, present_queue)
     }
 
-    fn create_swapchain(
+    pub fn create_swapchain(
         instance: &ash::Instance,
         device: &ash::Device,
         physical_device: vk::PhysicalDevice,
@@ -576,7 +586,7 @@ impl VkApp {
         )
     }
 
-    fn get_required_extensions(window: &Window) -> Vec<*const i8> {
+    pub fn get_required_extensions(window: &Window) -> Vec<*const i8> {
         let mut extension_names = ash_window::enumerate_required_extensions(window).unwrap();
 
         if ENABLE_VALIDATION_LAYERS {
@@ -594,7 +604,7 @@ impl VkApp {
         extension_names_ptrs
     }
 
-    fn create_image_views(
+    pub fn create_image_views(
         swapchain_images: &[vk::Image],
         format: vk::Format,
         device: &ash::Device,
@@ -629,7 +639,7 @@ impl VkApp {
             .collect::<Vec<_>>()
     }
 
-    fn create_instance(entry: &ash::Entry, window: &Window) -> ash::Instance {
+    pub fn create_instance(entry: &ash::Entry, window: &Window) -> ash::Instance {
         if ENABLE_VALIDATION_LAYERS && !Self::check_validation_layer_support(entry) {
             panic!("validation layers requested but not available!");
         }
@@ -690,7 +700,60 @@ impl VkApp {
         instance
     }
 
-    fn main_loop(self, event_loop: EventLoop<()>) {
+    pub fn create_shader_module(code: Vec<u8>, device: &ash::Device) -> vk::ShaderModule {
+        let create_info = vk::ShaderModuleCreateInfo {
+            s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::ShaderModuleCreateFlags::empty(),
+            code_size: code.len(),
+            p_code: code.as_ptr() as *const u32,
+        };
+
+        unsafe {
+            device
+                .create_shader_module(&create_info, None)
+                .expect("failed to create shader module!")
+        }
+    }
+
+    pub fn create_graphics_pipeline(device: &ash::Device) {
+        let vert_shader_code = Self::read_spv("shaders/vert.spv");
+        let frag_shader_code = Self::read_spv("shaders/frag.spv");
+
+        let vert_shader_module = Self::create_shader_module(vert_shader_code, device);
+        let frag_shader_module = Self::create_shader_module(frag_shader_code, device);
+
+        let p_name = CString::new("main").unwrap();
+
+        let vert_shader_stage_info = vk::PipelineShaderStageCreateInfo {
+            s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::PipelineShaderStageCreateFlags::empty(),
+            stage: vk::ShaderStageFlags::VERTEX,
+            module: vert_shader_module,
+            p_name: p_name.as_ptr(),
+            p_specialization_info: std::ptr::null(),
+        };
+
+        let frag_shader_stage_info = vk::PipelineShaderStageCreateInfo {
+            s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::PipelineShaderStageCreateFlags::empty(),
+            stage: vk::ShaderStageFlags::FRAGMENT,
+            module: frag_shader_module,
+            p_name: p_name.as_ptr(),
+            p_specialization_info: std::ptr::null(),
+        };
+
+        let shader_stages = [vert_shader_stage_info, frag_shader_stage_info];
+
+        unsafe {
+            device.destroy_shader_module(vert_shader_module, None);
+            device.destroy_shader_module(frag_shader_module, None);
+        }
+    }
+
+    pub fn main_loop(self, event_loop: EventLoop<()>) {
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
 
