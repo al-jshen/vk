@@ -42,7 +42,9 @@ struct VkApp {
     swapchain_image_views: Vec<vk::ImageView>,
     // vert_shader_module: vk::ShaderModule,
     // frag_shader_module: vk::ShaderModule,
+    render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
+    graphics_pipeline: vk::Pipeline,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -220,7 +222,10 @@ impl VkApp {
         let swapchain_image_views =
             Self::create_image_views(&swapchain_images, swapchain_format, &logical_device);
 
-        let pipeline_layout = Self::create_graphics_pipeline(&logical_device, swapchain_extent);
+        let render_pass = Self::create_render_pass(swapchain_format, &logical_device);
+
+        let (pipeline_layout, graphics_pipeline) =
+            Self::create_graphics_pipeline(&logical_device, swapchain_extent, render_pass);
 
         VkApp {
             _entry: entry,
@@ -238,7 +243,9 @@ impl VkApp {
             swapchain_format,
             swapchain_extent,
             swapchain_image_views,
+            render_pass,
             pipeline_layout,
+            graphics_pipeline,
         }
     }
 
@@ -248,6 +255,59 @@ impl VkApp {
             .with_title("Vulkan")
             .build(event_loop)
             .expect("failed to create window")
+    }
+
+    pub fn create_render_pass(
+        swapchain_format: vk::Format,
+        device: &ash::Device,
+    ) -> vk::RenderPass {
+        let color_attachment = vk::AttachmentDescription {
+            flags: vk::AttachmentDescriptionFlags::empty(),
+            format: swapchain_format,
+            samples: vk::SampleCountFlags::TYPE_1,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::STORE,
+            stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
+            stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+        };
+
+        let color_attachment_ref = vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        let subpass = vk::SubpassDescription {
+            flags: vk::SubpassDescriptionFlags::empty(),
+            pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
+            input_attachment_count: 0,
+            p_input_attachments: std::ptr::null(),
+            color_attachment_count: 1,
+            p_color_attachments: &color_attachment_ref,
+            p_resolve_attachments: std::ptr::null(),
+            p_depth_stencil_attachment: std::ptr::null(),
+            preserve_attachment_count: 0,
+            p_preserve_attachments: std::ptr::null(),
+        };
+
+        let render_pass_info = vk::RenderPassCreateInfo {
+            s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::RenderPassCreateFlags::empty(),
+            attachment_count: 1,
+            p_attachments: &color_attachment,
+            subpass_count: 1,
+            p_subpasses: &subpass,
+            dependency_count: 0,
+            p_dependencies: std::ptr::null(),
+        };
+
+        unsafe {
+            device
+                .create_render_pass(&render_pass_info, None)
+                .expect("failed to create render pass!")
+        }
     }
 
     pub fn setup_debug_messenger(
@@ -721,7 +781,8 @@ impl VkApp {
     pub fn create_graphics_pipeline(
         device: &ash::Device,
         swapchain_extent: vk::Extent2D,
-    ) -> vk::PipelineLayout {
+        render_pass: vk::RenderPass,
+    ) -> (vk::PipelineLayout, vk::Pipeline) {
         let vert_shader_code = Self::read_spv("shaders/vert.spv");
         let frag_shader_code = Self::read_spv("shaders/frag.spv");
 
@@ -870,12 +931,40 @@ impl VkApp {
                 .expect("failed to create pipeline layout!")
         };
 
+        let pipeline_info = vk::GraphicsPipelineCreateInfo {
+            s_type: vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::PipelineCreateFlags::empty(),
+            stage_count: 2,
+            p_stages: shader_stages.as_ptr(),
+            p_vertex_input_state: &vertex_input_info,
+            p_input_assembly_state: &input_assembly,
+            p_tessellation_state: std::ptr::null(),
+            p_viewport_state: &viewport_state,
+            p_rasterization_state: &rasterizer,
+            p_multisample_state: &multisampling,
+            p_depth_stencil_state: std::ptr::null(),
+            p_color_blend_state: &color_blending,
+            p_dynamic_state: std::ptr::null(),
+            layout: pipeline_layout,
+            render_pass,
+            subpass: 0,
+            base_pipeline_handle: vk::Pipeline::null(),
+            base_pipeline_index: -1,
+        };
+
+        let graphics_pipeline = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+                .expect("failed to create graphics pipeline!")
+        };
+
         unsafe {
             device.destroy_shader_module(vert_shader_module, None);
             device.destroy_shader_module(frag_shader_module, None);
         }
 
-        pipeline_layout
+        (pipeline_layout, graphics_pipeline[0])
     }
 
     pub fn main_loop(self, event_loop: EventLoop<()>) {
@@ -908,8 +997,10 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_render_pass(self.render_pass, None);
             for i in 0..self.swapchain_image_views.len() {
                 self.device
                     .destroy_image_view(self.swapchain_image_views[i], None);
