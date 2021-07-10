@@ -17,4 +17,11 @@ Progress
     - [Image views](https://github.com/al-jshen/vka/blob/179b44ad4543784f62d9623d98867269046c85aa/src/main.rs)
   - Graphics pipeline basics
     - [Shader modules](https://github.com/al-jshen/vka/tree/98c4d04a86cc10be4826c6a98521c702e1f96a55)
+    - [Fixed functions](https://github.com/al-jshen/vka/tree/7c0a5b2fb19be396c131897bdc0933c685871bd9)
+    - Render passes (forgot to commit here)
+    - [Conclusion](https://github.com/al-jshen/vka/tree/517ebad95a2d1c9faa23f9d012383c7a55a0baab)
+  - Drawing
+    - [Framebuffers](https://github.com/al-jshen/vka/tree/3ba5120178d1c012df46ab94c54f29a64e8ad4e7)
+    - [Command buffers](https://github.com/al-jshen/vka/tree/14aaba1e8d61db81df7fc945de87106d79e8be60)
+    - [Rendering and presentation](https://github.com/al-jshen/vka/tree/3915c015aae7c5c2d2bea85b49d2a0dce9b54c05)
   
