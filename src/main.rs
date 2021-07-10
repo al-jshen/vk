@@ -19,6 +19,8 @@ const HEIGHT: u32 = 600;
 const DEVICE_EXTENSIONS: [&str; 1] = ["VK_KHR_swapchain"];
 const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 #[cfg(debug_assertions)]
 const ENABLE_VALIDATION_LAYERS: bool = true;
 #[cfg(not(debug_assertions))]
@@ -48,6 +50,11 @@ struct VkApp {
     swapchain_framebuffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
+    in_flight_images: Vec<vk::Fence>,
+    current_frame: usize,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -254,6 +261,13 @@ impl VkApp {
             graphics_pipeline,
         );
 
+        let (
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            in_flight_images,
+        ) = Self::create_sync_objects(&logical_device, &swapchain_images);
+
         VkApp {
             _entry: entry,
             instance,
@@ -276,6 +290,11 @@ impl VkApp {
             swapchain_framebuffers,
             command_pool,
             command_buffers,
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            in_flight_images,
+            current_frame: 0,
         }
     }
 
@@ -321,6 +340,16 @@ impl VkApp {
             p_preserve_attachments: std::ptr::null(),
         };
 
+        let dependency = vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dependency_flags: vk::DependencyFlags::empty(),
+        };
+
         let render_pass_info = vk::RenderPassCreateInfo {
             s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
             p_next: std::ptr::null(),
@@ -329,8 +358,8 @@ impl VkApp {
             p_attachments: &color_attachment,
             subpass_count: 1,
             p_subpasses: &subpass,
-            dependency_count: 0,
-            p_dependencies: std::ptr::null(),
+            dependency_count: 1,
+            p_dependencies: &dependency,
         };
 
         unsafe {
@@ -418,6 +447,58 @@ impl VkApp {
                 }
             })
             .collect()
+    }
+
+    pub fn create_sync_objects(
+        device: &ash::Device,
+        swapchain_images: &[vk::Image],
+    ) -> (
+        Vec<vk::Semaphore>,
+        Vec<vk::Semaphore>,
+        Vec<vk::Fence>,
+        Vec<vk::Fence>,
+    ) {
+        let semaphore_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::SemaphoreCreateFlags::empty(),
+        };
+
+        let fence_info = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::FenceCreateFlags::SIGNALED,
+        };
+
+        let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+        let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+        let mut in_flight_fences = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+        let in_flight_images = vec![vk::Fence::null(); swapchain_images.len()];
+
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
+            image_available_semaphores.push(unsafe {
+                device
+                    .create_semaphore(&semaphore_info, None)
+                    .expect("failed to create semaphores for a frame!")
+            });
+            render_finished_semaphores.push(unsafe {
+                device
+                    .create_semaphore(&semaphore_info, None)
+                    .expect("failed to create semaphores for a frame!")
+            });
+            in_flight_fences.push(unsafe {
+                device
+                    .create_fence(&fence_info, None)
+                    .expect("failed to create fences for a frame!")
+            });
+        }
+
+        (
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            in_flight_images,
+        )
     }
 
     pub fn create_command_buffers(
@@ -1136,7 +1217,92 @@ impl VkApp {
         (pipeline_layout, graphics_pipeline[0])
     }
 
-    pub fn main_loop(self, event_loop: EventLoop<()>) {
+    pub fn draw_frame(&mut self) {
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.in_flight_fences[self.current_frame]], true, u64::MAX)
+                .expect("failed to wait for fences!");
+        }
+
+        let (image_index, _) = unsafe {
+            self.swapchain_loader
+                .acquire_next_image(
+                    self.swapchain,
+                    u64::MAX,
+                    self.image_available_semaphores[self.current_frame],
+                    vk::Fence::null(),
+                )
+                .expect("failed to acquire next image!")
+        };
+        let image_index = image_index as usize;
+
+        if self.in_flight_images[image_index] != vk::Fence::null() {
+            unsafe {
+                self.device
+                    .wait_for_fences(&[self.in_flight_images[image_index]], true, u64::MAX)
+                    .expect("failed to wait for fences!");
+            }
+        }
+
+        self.in_flight_images[image_index] = self.in_flight_fences[self.current_frame];
+
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let wait_semaphores = [self.image_available_semaphores[self.current_frame]];
+        let signal_semaphores = [self.render_finished_semaphores[self.current_frame]];
+
+        let submit_info = vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: std::ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: wait_semaphores.as_ptr(),
+            p_wait_dst_stage_mask: wait_stages.as_ptr(),
+            command_buffer_count: 1,
+            p_command_buffers: &self.command_buffers[image_index],
+            signal_semaphore_count: 1,
+            p_signal_semaphores: signal_semaphores.as_ptr(),
+        };
+
+        unsafe {
+            self.device
+                .reset_fences(&[self.in_flight_fences[self.current_frame]])
+                .expect("failed to reset fences!");
+
+            self.device
+                .queue_submit(
+                    self.graphics_queue,
+                    &[submit_info],
+                    self.in_flight_fences[self.current_frame],
+                )
+                .expect("failed to submit draw command buffer!");
+        }
+
+        let swapchains = [self.swapchain];
+
+        let present_info = vk::PresentInfoKHR {
+            s_type: vk::StructureType::PRESENT_INFO_KHR,
+            p_next: std::ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: signal_semaphores.as_ptr(),
+            swapchain_count: 1,
+            p_swapchains: swapchains.as_ptr(),
+            p_image_indices: &(image_index as u32),
+            p_results: std::ptr::null_mut(),
+        };
+
+        unsafe {
+            self.swapchain_loader
+                .queue_present(self.present_queue, &present_info)
+                .expect("failed to present image to swapchain!");
+
+            self.device
+                .queue_wait_idle(self.present_queue)
+                .expect("failed to queue wait idle!");
+        }
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    pub fn main_loop(mut self, event_loop: EventLoop<()>) {
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
 
@@ -1157,6 +1323,12 @@ impl VkApp {
                     },
                     _ => {}
                 },
+                Event::RedrawRequested(_) => self.draw_frame(),
+                Event::LoopDestroyed => unsafe {
+                    self.device
+                        .device_wait_idle()
+                        .expect("failed to device wait idle!");
+                },
                 _ => {}
             }
         })
@@ -1166,6 +1338,13 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            for i in 0..MAX_FRAMES_IN_FLIGHT {
+                self.device
+                    .destroy_semaphore(self.render_finished_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.image_available_semaphores[i], None);
+                self.device.destroy_fence(self.in_flight_fences[i], None);
+            }
             self.device.destroy_command_pool(self.command_pool, None);
             for i in 0..self.swapchain_framebuffers.len() {
                 self.device
