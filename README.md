@@ -25,3 +25,6 @@ Progress
     - [Command buffers](https://github.com/al-jshen/vka/tree/14aaba1e8d61db81df7fc945de87106d79e8be60)
     - [Rendering and presentation](https://github.com/al-jshen/vka/tree/3915c015aae7c5c2d2bea85b49d2a0dce9b54c05)
   
+Results
+---
+![Triangle](triangle.png)
