@@ -46,6 +46,8 @@ struct VkApp {
     pipeline_layout: vk::PipelineLayout,
     graphics_pipeline: vk::Pipeline,
     swapchain_framebuffers: Vec<vk::Framebuffer>,
+    command_pool: vk::CommandPool,
+    command_buffers: Vec<vk::CommandBuffer>,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -235,6 +237,23 @@ impl VkApp {
             swapchain_extent,
         );
 
+        let command_pool = Self::create_command_pool(
+            &instance,
+            &logical_device,
+            physical_device,
+            &surface_loader,
+            &surface,
+        );
+
+        let command_buffers = Self::create_command_buffers(
+            command_pool,
+            &swapchain_framebuffers,
+            &logical_device,
+            render_pass,
+            swapchain_extent,
+            graphics_pipeline,
+        );
+
         VkApp {
             _entry: entry,
             instance,
@@ -255,6 +274,8 @@ impl VkApp {
             pipeline_layout,
             graphics_pipeline,
             swapchain_framebuffers,
+            command_pool,
+            command_buffers,
         }
     }
 
@@ -399,6 +420,89 @@ impl VkApp {
             .collect()
     }
 
+    pub fn create_command_buffers(
+        command_pool: vk::CommandPool,
+        swapchain_framebuffers: &[vk::Framebuffer],
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        swapchain_extent: vk::Extent2D,
+        graphics_pipeline: vk::Pipeline,
+    ) -> Vec<vk::CommandBuffer> {
+        let alloc_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: swapchain_framebuffers.len() as u32,
+        };
+
+        let command_buffers = unsafe {
+            device
+                .allocate_command_buffers(&alloc_info)
+                .expect("failed to allocate command buffers!")
+        };
+
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::CommandBufferUsageFlags::empty(),
+            p_inheritance_info: std::ptr::null(),
+        };
+
+        let clear_color = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0., 0., 0., 1.],
+            },
+        };
+
+        let render_area = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: swapchain_extent,
+        };
+
+        for i in 0..command_buffers.len() {
+            unsafe {
+                device
+                    .begin_command_buffer(command_buffers[i], &begin_info)
+                    .expect("failed to begin recording command buffer!");
+            }
+
+            let render_pass_info = vk::RenderPassBeginInfo {
+                s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
+                p_next: std::ptr::null(),
+                render_pass,
+                framebuffer: swapchain_framebuffers[i],
+                render_area,
+                clear_value_count: 1,
+                p_clear_values: &clear_color,
+            };
+
+            unsafe {
+                device.cmd_begin_render_pass(
+                    command_buffers[i],
+                    &render_pass_info,
+                    vk::SubpassContents::INLINE,
+                );
+
+                device.cmd_bind_pipeline(
+                    command_buffers[i],
+                    vk::PipelineBindPoint::GRAPHICS,
+                    graphics_pipeline,
+                );
+
+                device.cmd_draw(command_buffers[i], 3, 1, 0, 0);
+
+                device.cmd_end_render_pass(command_buffers[i]);
+
+                device
+                    .end_command_buffer(command_buffers[i])
+                    .expect("failed to record command buffer!");
+            }
+        }
+
+        command_buffers
+    }
+
     pub fn create_surface(
         entry: &ash::Entry,
         instance: &ash::Instance,
@@ -436,6 +540,32 @@ impl VkApp {
         }
 
         panic!("failed to find GPUs with Vulkan support!");
+    }
+
+    pub fn create_command_pool(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+        surface_loader: &khr::Surface,
+        surface: &vk::SurfaceKHR,
+    ) -> vk::CommandPool {
+        let queue_family_indices =
+            Self::find_queue_family(instance, physical_device, surface_loader, surface);
+
+        let pool_info = vk::CommandPoolCreateInfo {
+            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::CommandPoolCreateFlags::empty(),
+            queue_family_index: queue_family_indices.graphics_family.unwrap(),
+        };
+
+        let command_pool = unsafe {
+            device
+                .create_command_pool(&pool_info, None)
+                .expect("failed to create command_pool!")
+        };
+
+        command_pool
     }
 
     pub fn is_device_suitable(
@@ -1036,6 +1166,7 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_command_pool(self.command_pool, None);
             for i in 0..self.swapchain_framebuffers.len() {
                 self.device
                     .destroy_framebuffer(self.swapchain_framebuffers[i], None);
