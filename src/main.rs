@@ -45,6 +45,7 @@ struct VkApp {
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     graphics_pipeline: vk::Pipeline,
+    swapchain_framebuffers: Vec<vk::Framebuffer>,
 }
 
 fn clamp<T>(val: T, min: T, max: T) -> T
@@ -227,6 +228,13 @@ impl VkApp {
         let (pipeline_layout, graphics_pipeline) =
             Self::create_graphics_pipeline(&logical_device, swapchain_extent, render_pass);
 
+        let swapchain_framebuffers = Self::create_framebuffers(
+            &logical_device,
+            &swapchain_image_views,
+            render_pass,
+            swapchain_extent,
+        );
+
         VkApp {
             _entry: entry,
             instance,
@@ -246,6 +254,7 @@ impl VkApp {
             render_pass,
             pipeline_layout,
             graphics_pipeline,
+            swapchain_framebuffers,
         }
     }
 
@@ -358,6 +367,36 @@ impl VkApp {
         }
 
         true
+    }
+
+    pub fn create_framebuffers(
+        device: &ash::Device,
+        swapchain_image_views: &[vk::ImageView],
+        render_pass: vk::RenderPass,
+        swapchain_extent: vk::Extent2D,
+    ) -> Vec<vk::Framebuffer> {
+        swapchain_image_views
+            .iter()
+            .map(|iv| {
+                let framebuffer_info = vk::FramebufferCreateInfo {
+                    s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                    p_next: std::ptr::null(),
+                    flags: vk::FramebufferCreateFlags::empty(),
+                    render_pass,
+                    attachment_count: 1,
+                    p_attachments: iv,
+                    width: swapchain_extent.width,
+                    height: swapchain_extent.height,
+                    layers: 1,
+                };
+
+                unsafe {
+                    device
+                        .create_framebuffer(&framebuffer_info, None)
+                        .expect("failed to create framebuffer!")
+                }
+            })
+            .collect()
     }
 
     pub fn create_surface(
@@ -997,6 +1036,10 @@ impl VkApp {
 impl Drop for VkApp {
     fn drop(&mut self) {
         unsafe {
+            for i in 0..self.swapchain_framebuffers.len() {
+                self.device
+                    .destroy_framebuffer(self.swapchain_framebuffers[i], None);
+            }
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
